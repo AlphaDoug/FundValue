@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API测试工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+        input {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            flex: 1;
+            max-width: 300px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #2563eb;
+        }
+        button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .result {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .error {
+            background: #fee2e2;
+            border: 1px solid #fecaca;
+            color: #991b1b;
+        }
+        .success {
+            background: #dcfce7;
+            border: 1px solid #bbf7d0;
+        }
+        .label {
+            font-weight: bold;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        pre {
+            margin: 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>API测试工具</h1>
+
+        <div class="card">
+            <div class="label">测试基金持仓API</div>
+            <div class="input-group">
+                <input type="text" id="fundCode" placeholder="输入基金代码（如：005550）" value="005550">
+                <button onclick="testFundHoldings()" id="btnFund">查询基金持仓</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="label">测试股票价格API</div>
+            <div class="input-group">
+                <input type="text" id="stockCodes" placeholder="输入股票代码（如：000001,000002）" value="000001,000002">
+                <button onclick="testStockPrices()" id="btnStock">查询股票价格</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="label">响应结果</div>
+            <div class="result" id="result">
+                等待请求...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function testFundHoldings() {
+            const fundCode = document.getElementById('fundCode').value.trim();
+            const result = document.getElementById('result');
+            const btn = document.getElementById('btnFund');
+
+            if (!fundCode) {
+                result.className = 'result error';
+                result.textContent = '请输入基金代码';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '查询中...';
+            result.className = 'result loading';
+            result.textContent = '正在查询...';
+
+            try {
+                const response = await fetch(`http://localhost:8000/api/fund/holdings?fundCode=${fundCode}`);
+                const data = await response.json();
+
+                result.className = 'result success';
+                result.innerHTML = `<strong>状态:</strong> ${response.status} ${response.statusText}\n\n` +
+                                  `<strong>返回数据:</strong>\n` +
+                                  `${JSON.stringify(data, null, 2)}`;
+
+                console.log('基金持仓数据:', data);
+            } catch (error) {
+                result.className = 'result error';
+                result.textContent = `请求失败: ${error.message}`;
+                console.error('错误:', error);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '查询基金持仓';
+            }
+        }
+
+        async function testStockPrices() {
+            const codesStr = document.getElementById('stockCodes').value.trim();
+            const result = document.getElementById('result');
+            const btn = document.getElementById('btnStock');
+
+            if (!codesStr) {
+                result.className = 'result error';
+                result.textContent = '请输入股票代码';
+                return;
+            }
+
+            const codes = codesStr.split(',').map(c => c.trim());
+
+            btn.disabled = true;
+            btn.textContent = '查询中...';
+            result.className = 'result loading';
+            result.textContent = '正在查询...';
+
+            try {
+                const response = await fetch('http://localhost:8000/api/stock/prices', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ codes: codes })
+                });
+
+                const data = await response.json();
+
+                result.className = 'result success';
+                result.innerHTML = `<strong>状态:</strong> ${response.status} ${response.statusText}\n\n` +
+                                  `<strong>返回数据:</strong>\n` +
+                                  `${JSON.stringify(data, null, 2)}`;
+
+                console.log('股票价格数据:', data);
+            } catch (error) {
+                result.className = 'result error';
+                result.textContent = `请求失败: ${error.message}`;
+                console.error('错误:', error);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '查询股票价格';
+            }
+        }
+
+        // 页面加载完成后自动测试
+        window.onload = function() {
+            console.log('API测试工具已加载');
+            console.log('后端地址: http://localhost:8000');
+            testFundHoldings();
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,609 @@
+"""
+使用AkShare获取基金数据的服务
+需要安装: pip install akshare
+"""
+import akshare as ak
+import pandas as pd
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from datetime import datetime
+import json
+import os
+
+app = Flask(__name__)
+CORS(app)
+
+# 加载分钟级模拟数据
+def load_minute_data():
+    """加载股票分钟级涨跌幅数据"""
+    try:
+        data_file = os.path.join(os.path.dirname(__file__), '..', 'stock_minute_data.json')
+        with open(data_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"加载分钟数据失败: {str(e)}")
+        return {}
+
+minute_data_cache = load_minute_data()
+
+def calculate_valuation_at_time(current_time, holdings):
+    """计算指定时间的基金估值"""
+    time_str = current_time.strftime('%H:%M')
+
+    # 跳过11:30-13:00之间的非交易时间
+    if "11:30" < time_str < "13:00":
+        return []
+
+    # 计算当前时间的基金估值
+    total_market_value = 0
+    weighted_change = 0
+
+    for holding in holdings:
+        stock_code_simple = holding['stockCode'].replace('.XSHE', '').replace('.XSHG', '').replace('.XBJE', '')
+        market_value = holding['marketValue']
+        hold_percent = holding['holdPercent']
+
+        # 从分钟数据获取该时间点的涨跌幅
+        stock_data = minute_data_cache.get(stock_code_simple, {})
+        minute_changes = stock_data.get('minute_changes', [])
+
+        current_change = 0
+        if minute_changes:
+            for change_data in minute_changes:
+                if change_data['time'] <= time_str:
+                    current_change = change_data['change']
+
+        # 加权计算
+        total_market_value += market_value
+        weighted_change += market_value * current_change
+
+    if total_market_value > 0:
+        estimated_change = weighted_change / total_market_value
+        return [{'time': time_str, 'changePercent': round(estimated_change, 2)}]
+    return []
+
+# 基金005550的持仓股票模拟价格数据
+MOCK_STOCK_PRICES_005550 = {
+    '300394': {'open': 151.00, 'close': 155.20, 'high': 156.50, 'low': 150.20, 'preClose': 151.00, 'changePercent': 2.78},
+    '300308': {'open': 156.50, 'close': 158.30, 'high': 159.80, 'low': 155.90, 'preClose': 156.50, 'changePercent': 1.15},
+    '002463': {'open': 30.15, 'close': 29.80, 'high': 30.50, 'low': 29.60, 'preClose': 30.15, 'changePercent': -1.16},
+    '002371': {'open': 305.20, 'close': 308.50, 'high': 310.00, 'low': 304.50, 'preClose': 305.20, 'changePercent': 1.08},
+    '300476': {'open': 24.25, 'close': 24.60, 'high': 24.80, 'low': 24.10, 'preClose': 24.25, 'changePercent': 1.44}
+}
+
+# 缓存股票实时行情，避免频繁请求
+stock_cache = {}
+cache_time = None
+
+def get_stock_market_code(stock_code):
+    """将股票代码转换为市场代码"""
+    if stock_code.startswith('6') or stock_code.startswith('5'):
+        return 'XSHG'
+    else:
+        return 'XSHE'
+
+def get_cached_stock_prices():
+    """获取缓存的股票实时行情"""
+    global stock_cache, cache_time
+
+    import time
+    current_time = time.time()
+
+    # 缓存5分钟内有效
+    if cache_time and (current_time - cache_time) < 300 and stock_cache:
+        print(f"使用缓存数据，{len(stock_cache)}只股票")
+        return stock_cache
+
+    try:
+        print("使用单个股票查询接口获取实时行情...")
+        # 使用stock_bid_ask_em接口逐个查询股票
+        # 这个接口更稳定，不容易出现代理问题
+
+        # 由于需要逐个查询，这里先返回空，在实际使用时再查询
+        stock_cache = {}
+        cache_time = current_time
+        print("准备实时查询")
+        return stock_cache
+
+    except Exception as e:
+        print(f"准备股票行情失败: {str(e)}")
+        return {}
+
+
+def get_single_stock_price(stock_code, current_time=None):
+    """获取单个股票的实时价格（使用分钟级模拟数据）"""
+    try:
+        # 去除市场后缀
+        code = stock_code.replace('.XSHE', '').replace('.XSHG', '').replace('.XBJE', '')
+
+        # 获取当前时间
+        if current_time is None:
+            current_time = datetime.now()
+        time_str = current_time.strftime('%H:%M')
+
+        print(f"查询股票 {code} 在 {time_str} 的行情...")
+
+        # 从分钟数据中获取该时间的涨跌幅
+        stock_data = minute_data_cache.get(code, {})
+        base_price = stock_data.get('base_price', 50.0)
+        minute_changes = stock_data.get('minute_changes', [])
+
+        # 找到最接近当前时间的涨跌幅
+        current_change = 0
+        if minute_changes:
+            for change_data in minute_changes:
+                if change_data['time'] <= time_str:
+                    current_change = change_data['change']
+
+        # 计算当前价格
+        current_price = base_price * (1 + current_change / 100)
+        pre_close = base_price
+        change_value = current_price - pre_close
+
+        result = {
+            'code': code,
+            'name': stock_data.get('name', code),
+            'open': base_price * (1 + current_change / 100 * 0.5),  # 开盘价约在开盘和当前中间
+            'close': current_price,
+            'high': current_price * 1.02 if current_change > 0 else current_price,
+            'low': current_price if current_change > 0 else current_price * 0.98,
+            'preClose': pre_close,
+            'change': change_value,
+            'changePercent': current_change,
+            'volume': 1000000,
+            'amount': int(current_price * 1000000)
+        }
+
+        print(f"  {code}: 最新={result['close']:.2f} 涨跌幅={result['changePercent']:.2f}% (分钟数据)")
+
+        return result
+
+    except Exception as e:
+        print(f"  查询股票 {code} 失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+@app.route('/api/fund/holdings')
+def get_fund_holdings():
+    """获取基金持仓数据"""
+    try:
+        fund_code = request.args.get('fundCode')
+
+        if not fund_code:
+            return jsonify({'error': '基金代码不能为空'}), 400
+
+        # 格式化基金代码为6位
+        fund_code = fund_code.zfill(6)
+
+        print(f"查询基金持仓: {fund_code}")
+
+        # 获取当前年份和前一年
+        current_year = datetime.now().year
+
+        try:
+            # 尝试获取当年数据，如果没有则获取前一年数据
+            holdings_df = None
+
+            for year in [str(current_year), str(current_year - 1), str(current_year - 2)]:
+                print(f"尝试获取 {year} 年持仓数据...")
+                try:
+                    holdings_df = ak.fund_portfolio_hold_em(symbol=fund_code, date=year)
+                    if holdings_df is not None and not holdings_df.empty:
+                        print(f"成功获取 {year} 年持仓数据，共 {len(holdings_df)} 条")
+                        break
+                    else:
+                        print(f"{year} 年数据为空")
+                except Exception as e:
+                    print(f"获取 {year} 年数据失败: {str(e)}")
+                    continue
+
+            # 检查是否获取到数据
+            if holdings_df is None or holdings_df.empty:
+                print(f"基金 {fund_code} 暂无持仓数据")
+                return jsonify({
+                    'fundCode': fund_code,
+                    'holdings': []
+                })
+
+            print(f"获取到 {len(holdings_df)} 条持仓记录")
+            print(holdings_df.head())
+
+            # 获取最新一期和上一期的季度数据
+            latest_quarter_holdings = None
+            previous_quarter_holdings = None
+
+            if '季度' in holdings_df.columns:
+                # 获取所有季度并排序
+                quarters = sorted(holdings_df['季度'].unique())
+                print(f"共 {len(quarters)} 个季度的数据: {quarters}")
+
+                # 找出最新的季度和上一季度
+                if len(quarters) > 0:
+                    latest_quarter = quarters[-1]
+                    print(f"最新季度: {latest_quarter}")
+                    latest_quarter_holdings = holdings_df[holdings_df['季度'] == latest_quarter].copy()
+                    print(f"最新季度持仓数量: {len(latest_quarter_holdings)}")
+
+                if len(quarters) > 1:
+                    previous_quarter = quarters[-2]
+                    print(f"上一季度: {previous_quarter}")
+                    previous_quarter_holdings = holdings_df[holdings_df['季度'] == previous_quarter].copy()
+                    print(f"上一季度持仓数量: {len(previous_quarter_holdings)}")
+
+            # 如果没有最新季度数据，使用全部数据
+            if latest_quarter_holdings is None:
+                latest_quarter_holdings = holdings_df
+
+            # 创建上一季度的持仓占比字典（股票代码 -> 占净值比例）
+            prev_hold_percent_map = {}
+            if previous_quarter_holdings is not None:
+                for _, row in previous_quarter_holdings.iterrows():
+                    stock_code = str(row['股票代码']).zfill(6)
+                    prev_hold_percent_map[stock_code] = row['占净值比例'] if pd.notna(row['占净值比例']) else 0
+
+            # 转换为API需要的格式
+            holdings = []
+            for _, row in latest_quarter_holdings.iterrows():
+                stock_code = str(row['股票代码']).zfill(6)
+                market = get_stock_market_code(stock_code)
+                full_code = f"{stock_code}.{market}"
+
+                current_hold_percent = row['占净值比例'] if pd.notna(row['占净值比例']) else 0
+                prev_hold_percent = prev_hold_percent_map.get(stock_code, 0)
+
+                # 计算变化和是否新增
+                hold_percent_change = current_hold_percent - prev_hold_percent
+                is_new = stock_code not in prev_hold_percent_map
+
+                holdings.append({
+                    'stockCode': full_code,
+                    'stockName': row['股票名称'],
+                    'shares': row['持股数'] if pd.notna(row['持股数']) else 0,
+                    'costPrice': 0,  # AkShare不提供成本价，需要计算
+                    'holdPercent': current_hold_percent,
+                    'marketValue': row['持仓市值'] if pd.notna(row['持仓市值']) else 0,
+                    'quarter': row['季度'] if '季度' in row else '',
+                    'prevHoldPercent': prev_hold_percent,
+                    'holdPercentChange': hold_percent_change,
+                    'isNew': is_new
+                })
+
+            print(f"转换后的持仓数据: {len(holdings)} 条")
+            return jsonify({
+                'fundCode': fund_code,
+                'holdings': holdings
+            })
+
+        except Exception as e:
+            print(f"AkShare获取持仓失败: {str(e)}")
+            # 返回模拟数据作为fallback
+            print("使用模拟数据")
+            mock_holdings = {
+                '000001': [
+                    {'stockCode': '000001.XSHE', 'stockName': '平安银行', 'shares': 10000, 'costPrice': 12.50, 'holdPercent': 8.5},
+                    {'stockCode': '000002.XSHE', 'stockName': '万科A', 'shares': 5000, 'costPrice': 25.80, 'holdPercent': 5.2},
+                    {'stockCode': '600000.XSHG', 'stockName': '浦发银行', 'shares': 8000, 'costPrice': 8.90, 'holdPercent': 6.8}
+                ],
+                '000002': [
+                    {'stockCode': '600036.XSHG', 'stockName': '招商银行', 'shares': 15000, 'costPrice': 35.20, 'holdPercent': 9.2},
+                    {'stockCode': '000858.XSHE', 'stockName': '五粮液', 'shares': 3000, 'costPrice': 180.50, 'holdPercent': 10.5}
+                ]
+            }
+
+            holdings = mock_holdings.get(fund_code, [])
+            return jsonify({
+                'fundCode': fund_code,
+                'holdings': holdings
+            })
+
+    except Exception as e:
+        print(f"获取基金持仓失败: {str(e)}")
+        return jsonify({'error': f'获取基金持仓失败: {str(e)}'}), 500
+
+
+@app.route('/api/stock/prices', methods=['POST'])
+def get_stock_prices():
+    """获取股票实时价格"""
+    try:
+        data = request.get_json()
+        codes = data.get('codes', [])
+
+        if not codes or not isinstance(codes, list):
+            return jsonify({'error': '股票代码列表不能为空'}), 400
+
+        print(f"查询股票价格: {codes}")
+
+        prices = {}
+
+        for code in codes:
+            # 解析股票代码（去除.XSHG或.XSHE后缀）
+            stock_code = code.replace('.XSHG', '').replace('.XSHE', '')
+
+            # 首先尝试使用单个股票接口查询
+            stock_data = get_single_stock_price(code)
+
+            if stock_data:
+                prices[code] = {
+                    'open': stock_data['open'],
+                    'close': stock_data['close'],
+                    'high': stock_data['high'],
+                    'low': stock_data['low'],
+                    'preClose': stock_data['preClose'],
+                    'changePercent': stock_data['changePercent'],
+                    'change': stock_data['change'],
+                    'volume': stock_data['volume'],
+                    'amount': stock_data['amount'],
+                    'pe': 0,  # stock_bid_ask_em不提供
+                    'pb': 0   # stock_bid_ask_em不提供
+                }
+            elif stock_code in MOCK_STOCK_PRICES_005550:
+                # 使用005550基金的模拟股票价格
+                mock_data = MOCK_STOCK_PRICES_005550[stock_code]
+                prices[code] = {
+                    'open': mock_data['open'],
+                    'close': mock_data['close'],
+                    'high': mock_data['high'],
+                    'low': mock_data['low'],
+                    'preClose': mock_data['preClose'],
+                    'changePercent': mock_data['changePercent'],
+                    'change': mock_data['close'] - mock_data['preClose'],
+                    'volume': 1000000,
+                    'amount': 100000000,
+                    'pe': 30.5,
+                    'pb': 3.2
+                }
+                print(f"  {code}: 使用模拟数据 涨跌: {mock_data['changePercent']:.2f}%")
+            else:
+                # 未找到该股票，返回默认值
+                print(f"  {code}: 未找到数据，使用默认值")
+                prices[code] = {
+                    'open': 0.0,
+                    'close': 0.0,
+                    'high': 0.0,
+                    'low': 0.0,
+                    'preClose': 0.0,
+                    'changePercent': 0.0,
+                    'change': 0.0,
+                    'volume': 0,
+                    'amount': 0,
+                    'pe': 0,
+                    'pb': 0
+                }
+
+        return jsonify(prices)
+
+    except Exception as e:
+        print(f"获取股票价格失败: {str(e)}")
+        return jsonify({'error': f'获取股票价格失败: {str(e)}'}), 500
+
+
+@app.route('/api/health')
+def health():
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/fund/valuation-history')
+def get_fund_valuation_history():
+    """获取基金估值历史走势（从开盘到当前）"""
+    try:
+        fund_code = request.args.get('fundCode')
+
+        if not fund_code:
+            return jsonify({'error': '基金代码不能为空'}), 400
+
+        # 格式化基金代码为6位
+        fund_code = fund_code.zfill(6)
+
+        print(f"查询基金估值历史: {fund_code}")
+
+        # 先获取持仓数据
+        holdings_result = None
+        current_year = datetime.now().year
+
+        for year in [str(current_year), str(current_year - 1), str(current_year - 2)]:
+            try:
+                holdings_df = ak.fund_portfolio_hold_em(symbol=fund_code, date=year)
+                if holdings_df is not None and not holdings_df.empty:
+                    # 获取最新季度数据
+                    if '季度' in holdings_df.columns:
+                        quarters = sorted(holdings_df['季度'].unique())
+                        if len(quarters) > 0:
+                            latest_quarter = quarters[-1]
+                            holdings_df = holdings_df[holdings_df['季度'] == latest_quarter]
+                    holdings_result = holdings_df
+                    break
+            except Exception as e:
+                print(f"获取 {year} 年数据失败: {str(e)}")
+                continue
+
+        if holdings_result is None or holdings_result.empty:
+            return jsonify({'error': '暂无持仓数据'}), 400
+
+        # 解析持仓
+        holdings = []
+        for _, row in holdings_result.iterrows():
+            stock_code = str(row['股票代码']).zfill(6)
+            market = get_stock_market_code(stock_code)
+            full_code = f"{stock_code}.{market}"
+
+            holdings.append({
+                'stockCode': full_code,
+                'stockName': row['股票名称'],
+                'marketValue': row['持仓市值'] if pd.notna(row['持仓市值']) else 0,
+                'holdPercent': row['占净值比例'] if pd.notna(row['占净值比例']) else 0
+            })
+
+        # 判断当前是否在开盘时间内
+        now = datetime.now()
+        current_hour = now.hour
+        current_minute = now.minute
+
+        # 开盘时间判断：
+        # 上午：9:30-11:30
+        # 下午：13:00-15:00
+        is_trading_time = (
+            (9 < current_hour < 11) or
+            (current_hour == 9 and current_minute >= 30) or
+            (current_hour == 11 and current_minute < 30) or
+            (13 <= current_hour < 15)
+        )
+
+        # 判断当前是上午还是下午
+        is_morning_session = (current_hour < 12)
+
+        # 如果不在开盘时间，显示当天完整的走势（上午+下午）
+        if not is_trading_time:
+            print(f"当前不在开盘时间 ({now.strftime('%H:%M')})，显示全天完整走势")
+            # 生成上午9:30-11:30和下午13:00-15:00的所有时间点
+            valuation_history = []
+            start_time_morning = datetime.now().replace(hour=9, minute=30, second=0, microsecond=0)
+            end_time_morning = datetime.now().replace(hour=11, minute=30, second=0, microsecond=0)
+            start_time_afternoon = datetime.now().replace(hour=13, minute=0, second=0, microsecond=0)
+            end_time_afternoon = datetime.now().replace(hour=15, minute=0, second=0, microsecond=0)
+
+            # 生成上午数据
+            current_time = start_time_morning
+            while current_time <= end_time_morning:
+                valuation_history.extend(calculate_valuation_at_time(current_time, holdings))
+                current_time = current_time + timedelta(minutes=1)
+
+            # 生成下午数据
+            current_time = start_time_afternoon
+            while current_time <= end_time_afternoon:
+                valuation_history.extend(calculate_valuation_at_time(current_time, holdings))
+                current_time = current_time + timedelta(minutes=1)
+        else:
+            # 在开盘时间内，显示从开盘到现在的走势
+            print(f"当前在开盘时间 ({now.strftime('%H:%M')})，显示从开盘到现在的走势")
+            start_time = datetime.now().replace(hour=9, minute=30, second=0, microsecond=0)
+            end_time = now
+
+            valuation_history = []
+            current_time = start_time
+            while current_time <= end_time:
+                valuation_history.extend(calculate_valuation_at_time(current_time, holdings))
+                current_time = current_time + timedelta(minutes=1)
+
+        return jsonify({
+            'fundCode': fund_code,
+            'valuationHistory': valuation_history
+        })
+
+        current_time = start_time
+        from datetime import timedelta
+
+        while current_time <= end_time:
+            time_str = current_time.strftime('%H:%M')
+
+            # 计算当前时间的基金估值
+            total_market_value = 0
+            weighted_change = 0
+
+            for holding in holdings:
+                stock_code_simple = holding['stockCode'].replace('.XSHE', '').replace('.XSHG', '').replace('.XBJE', '')
+                market_value = holding['marketValue']
+                hold_percent = holding['holdPercent']
+
+                # 从分钟数据获取该时间点的涨跌幅
+                stock_data = minute_data_cache.get(stock_code_simple, {})
+                minute_changes = stock_data.get('minute_changes', [])
+
+                current_change = 0
+                if minute_changes:
+                    for change_data in minute_changes:
+                        if change_data['time'] <= time_str:
+                            current_change = change_data['change']
+
+                # 加权计算
+                total_market_value += market_value
+                weighted_change += market_value * current_change
+
+            if total_market_value > 0:
+                estimated_change = weighted_change / total_market_value
+                valuation_history.append({
+                    'time': time_str,
+                    'changePercent': round(estimated_change, 2)
+                })
+
+            # 每分钟递增（使用timedelta避免溢出问题）
+            current_time = current_time + timedelta(minutes=1)
+
+        return jsonify({
+            'fundCode': fund_code,
+            'valuationHistory': valuation_history
+        })
+
+    except Exception as e:
+        print(f"获取估值历史失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'获取估值历史失败: {str(e)}'}), 500
+
+
+@app.route('/api/test/005550')
+def test_fund_005550():
+    """测试接口：返回005550基金的完整数据"""
+    test_data = {
+        'fundCode': '005550',
+        'fundName': '金信稳健策略灵活配置',
+        'holdings': [
+            {
+                'stockCode': '300394.XSHE',
+                'stockName': '天孚通信',
+                'shares': 620000,
+                'costPrice': 151.00,
+                'holdPercent': 8.90,
+                'marketValue': 93620000
+            },
+            {
+                'stockCode': '300308.XSHE',
+                'stockName': '中际旭创',
+                'shares': 550000,
+                'costPrice': 156.50,
+                'holdPercent': 8.17,
+                'marketValue': 86110000
+            },
+            {
+                'stockCode': '002463.XSHE',
+                'stockName': '沪电股份',
+                'shares': 2840000,
+                'costPrice': 30.15,
+                'holdPercent': 8.14,
+                'marketValue': 85626000
+            },
+            {
+                'stockCode': '002371.XSHE',
+                'stockName': '北方华创',
+                'shares': 270000,
+                'costPrice': 305.20,
+                'holdPercent': 7.83,
+                'marketValue': 82404000
+            },
+            {
+                'stockCode': '300476.XSHE',
+                'stockName': '胜宏科技',
+                'shares': 2350000,
+                'costPrice': 24.25,
+                'holdPercent': 5.40,
+                'marketValue': 56917500
+            }
+        ],
+        'summary': {
+            'totalHoldings': 75,
+            'top5Holdings': 5,
+            'totalMarketValue': 404577000
+        }
+    }
+    return jsonify(test_data)
+
+
+if __name__ == '__main__':
+    print("=" * 50)
+    print("启动基金API服务...")
+    print("=" * 50)
+    print("服务地址: http://127.0.0.1:8001")
+    print("API文档: 请查看 backend/README.md")
+    print("=" * 50)
+    app.run(host='127.0.0.1', port=8001, debug=True)
