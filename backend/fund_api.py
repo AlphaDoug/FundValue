@@ -6,7 +6,7 @@ import akshare as ak
 import pandas as pd
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 
@@ -29,10 +29,22 @@ minute_data_cache = load_minute_data()
 def calculate_valuation_at_time(current_time, holdings):
     """计算指定时间的基金估值"""
     time_str = current_time.strftime('%H:%M')
+    current_hour = current_time.hour
+    current_minute = current_time.minute
 
-    # 跳过11:30-13:00之间的非交易时间
-    if "11:30" < time_str < "13:00":
+    # 跳过11:31-12:59之间的非交易时间
+    if time_str > "11:30" and time_str < "13:00":
         return []
+
+    # 判断是否在开盘时间内（包含11:30和15:00作为收盘时刻）
+    # 交易时间：9:30-11:30, 13:00-15:00
+    is_trading_time = (
+        (9 < current_hour < 11) or
+        (current_hour == 9 and current_minute >= 30) or
+        (current_hour == 11 and current_minute >= 0 and current_minute <= 30) or
+        (13 <= current_hour < 15) or
+        (current_hour == 15 and current_minute == 0)
+    )
 
     # 计算当前时间的基金估值
     total_market_value = 0
@@ -43,15 +55,31 @@ def calculate_valuation_at_time(current_time, holdings):
         market_value = holding['marketValue']
         hold_percent = holding['holdPercent']
 
-        # 从分钟数据获取该时间点的涨跌幅
+        # 从分钟数据获取该时间点的价格
         stock_data = minute_data_cache.get(stock_code_simple, {})
-        minute_changes = stock_data.get('minute_changes', [])
+        minute_prices = stock_data.get('minute_prices', [])
+        open_price = stock_data.get('open_price', stock_data.get('base_price', 100.0))
+        base_price = stock_data.get('base_price', open_price)
 
+        current_price = open_price
         current_change = 0
-        if minute_changes:
-            for change_data in minute_changes:
-                if change_data['time'] <= time_str:
-                    current_change = change_data['change']
+        if minute_prices:
+            if is_trading_time:
+                # 交易时间内，使用当前时间对应的最新价格
+                for price_data in minute_prices:
+                    if price_data['time'] <= time_str:
+                        current_price = price_data['price']
+            else:
+                # 不在交易时间（如晚上8点），使用当天15:00的收盘价格
+                for price_data in minute_prices:
+                    if price_data['time'] <= "15:00":
+                        current_price = price_data['price']
+
+        # 计算涨跌幅：
+        # 始终使用：(最新价格 - 开盘价) / 开盘价 * 100
+        # 最新价格在交易时间内是当前时间价格，非交易时间是15:00收盘价
+        if open_price > 0:
+            current_change = (current_price - open_price) / open_price * 100
 
         # 加权计算
         total_market_value += market_value
@@ -120,41 +148,67 @@ def get_single_stock_price(stock_code, current_time=None):
         if current_time is None:
             current_time = datetime.now()
         time_str = current_time.strftime('%H:%M')
+        current_hour = current_time.hour
+        current_minute = current_time.minute
 
         print(f"查询股票 {code} 在 {time_str} 的行情...")
 
-        # 从分钟数据中获取该时间的涨跌幅
+        # 从分钟数据中获取该时间的价格
         stock_data = minute_data_cache.get(code, {})
-        base_price = stock_data.get('base_price', 50.0)
-        minute_changes = stock_data.get('minute_changes', [])
+        minute_prices = stock_data.get('minute_prices', [])
+        open_price = stock_data.get('open_price', stock_data.get('base_price', 50.0))
+        base_price = stock_data.get('base_price', open_price)
 
-        # 找到最接近当前时间的涨跌幅
-        current_change = 0
-        if minute_changes:
-            for change_data in minute_changes:
-                if change_data['time'] <= time_str:
-                    current_change = change_data['change']
+        # 判断是否在开盘时间内（包含11:30和15:00作为收盘时刻）
+        # 交易时间：9:30-11:30, 13:00-15:00
+        is_trading_time = (
+            (9 < current_hour < 11) or
+            (current_hour == 9 and current_minute >= 30) or
+            (current_hour == 11 and current_minute >= 0 and current_minute <= 30) or
+            (13 <= current_hour < 15) or
+            (current_hour == 15 and current_minute == 0)
+        )
 
-        # 计算当前价格
-        current_price = base_price * (1 + current_change / 100)
-        pre_close = base_price
-        change_value = current_price - pre_close
+        # 找到最接近当前时间的价格
+        current_price = open_price
+        if minute_prices:
+            if is_trading_time:
+                # 交易时间内，使用当前时间对应的最新价格
+                for price_data in minute_prices:
+                    if price_data['time'] <= time_str:
+                        current_price = price_data['price']
+            else:
+                # 不在交易时间（如晚上8点），使用当天15:00的收盘价格
+                for price_data in minute_prices:
+                    if price_data['time'] <= "15:00":
+                        current_price = price_data['price']
+
+        # 计算涨跌幅：
+        # 始终使用：(最新价格 - 开盘价) / 开盘价 * 100
+        # 最新价格在交易时间内是当前时间价格，非交易时间是15:00收盘价
+        if open_price > 0:
+            change_value = current_price - base_price
+            change_percent = (current_price - open_price) / open_price * 100
+
+        # 估算最高价和最低价
+        high = max(current_price, open_price) * 1.02
+        low = min(current_price, open_price) * 0.98
 
         result = {
             'code': code,
             'name': stock_data.get('name', code),
-            'open': base_price * (1 + current_change / 100 * 0.5),  # 开盘价约在开盘和当前中间
+            'open': open_price,
             'close': current_price,
-            'high': current_price * 1.02 if current_change > 0 else current_price,
-            'low': current_price if current_change > 0 else current_price * 0.98,
-            'preClose': pre_close,
-            'change': change_value,
-            'changePercent': current_change,
+            'high': round(high, 2),
+            'low': round(low, 2),
+            'preClose': base_price,
+            'change': round(change_value, 2),
+            'changePercent': round(change_percent, 2),
             'volume': 1000000,
             'amount': int(current_price * 1000000)
         }
 
-        print(f"  {code}: 最新={result['close']:.2f} 涨跌幅={result['changePercent']:.2f}% (分钟数据)")
+        print(f"  {code}: 最新={result['close']:.2f} 涨跌幅={result['changePercent']:.2f}% (开盘价={open_price:.2f}, 昨收={base_price:.2f}, 交易中={is_trading_time})")
 
         return result
 
@@ -491,50 +545,6 @@ def get_fund_valuation_history():
             'valuationHistory': valuation_history
         })
 
-        current_time = start_time
-        from datetime import timedelta
-
-        while current_time <= end_time:
-            time_str = current_time.strftime('%H:%M')
-
-            # 计算当前时间的基金估值
-            total_market_value = 0
-            weighted_change = 0
-
-            for holding in holdings:
-                stock_code_simple = holding['stockCode'].replace('.XSHE', '').replace('.XSHG', '').replace('.XBJE', '')
-                market_value = holding['marketValue']
-                hold_percent = holding['holdPercent']
-
-                # 从分钟数据获取该时间点的涨跌幅
-                stock_data = minute_data_cache.get(stock_code_simple, {})
-                minute_changes = stock_data.get('minute_changes', [])
-
-                current_change = 0
-                if minute_changes:
-                    for change_data in minute_changes:
-                        if change_data['time'] <= time_str:
-                            current_change = change_data['change']
-
-                # 加权计算
-                total_market_value += market_value
-                weighted_change += market_value * current_change
-
-            if total_market_value > 0:
-                estimated_change = weighted_change / total_market_value
-                valuation_history.append({
-                    'time': time_str,
-                    'changePercent': round(estimated_change, 2)
-                })
-
-            # 每分钟递增（使用timedelta避免溢出问题）
-            current_time = current_time + timedelta(minutes=1)
-
-        return jsonify({
-            'fundCode': fund_code,
-            'valuationHistory': valuation_history
-        })
-
     except Exception as e:
         print(f"获取估值历史失败: {str(e)}")
         import traceback
@@ -597,6 +607,51 @@ def test_fund_005550():
         }
     }
     return jsonify(test_data)
+
+
+@app.route('/api/fund/name', methods=['GET'])
+def get_fund_name():
+    """获取基金名称"""
+    fund_code = request.args.get('fundCode')
+    if not fund_code:
+        return jsonify({'error': '缺少基金代码'}), 400
+
+    try:
+        print(f"查询基金名称: {fund_code}")
+        fund_info = ak.fund_individual_basic_info_xq(symbol=fund_code)
+        
+        if fund_info is None or fund_info.empty:
+            return jsonify({'error': '未找到基金信息'}), 404
+        
+        # 打印列名用于调试
+        print(f"返回的列名: {fund_info.columns.tolist()}")
+        print(f"返回的数据:\n{fund_info}")
+        
+        # 获取基金名称
+        # DataFrame是转置格式，包含item和value两列
+        fund_name = ''
+        
+        # 方法1：从item列查找"基金名称"对应的value
+        if 'item' in fund_info.columns and 'value' in fund_info.columns:
+            fund_name_row = fund_info[fund_info['item'] == '基金名称']
+            if not fund_name_row.empty:
+                fund_name = fund_name_row.iloc[0]['value']
+        
+        # 方法2：直接从原始JSON获取（如果有access）
+        if not fund_name and hasattr(fund_info, '_data'):
+            # 尝试其他获取方式
+            pass
+        
+        print(f"基金名称: {fund_name}")
+        return jsonify({
+            'fundCode': fund_code,
+            'fundName': fund_name
+        })
+    except Exception as e:
+        print(f"获取基金名称失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

@@ -78,3 +78,19 @@ export async function getFundValuationHistory(fundCode) {
     throw error
   }
 }
+
+// 获取基金名称
+export async function getFundName(fundCode) {
+  console.log('开始获取基金名称:', fundCode)
+  try {
+    const response = await axios.get(`${API_BASE}/fund/name`, {
+      params: { fundCode }
+    })
+    console.log('基金名称:', response.data)
+    return response.data
+  } catch (error) {
+    console.error('获取基金名称失败:', error)
+    throw error
+  }
+}
+
