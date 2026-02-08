@@ -87,20 +87,29 @@
             </div>
           </div>
 
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-3 gap-4">
             <div class="info-item bg-gray-50 rounded-lg p-3">
-              <p class="text-xs text-gray-500 mb-1">持仓总市值</p>
+              <p class="text-xs text-gray-500 mb-1">总资产</p>
               <p class="text-lg font-semibold text-gray-800">
-                ¥{{ formatNumber((userEstimatedChange || estimatedChange).totalMarketValue) }}
+                ¥{{ formatNumber((userEstimatedChange || estimatedChange).totalMarketValue + (userEstimatedChange || estimatedChange).totalChangeValue) }}
               </p>
             </div>
             <div class="info-item bg-gray-50 rounded-lg p-3">
-              <p class="text-xs text-gray-500 mb-1">预估变动额</p>
+              <p class="text-xs text-gray-500 mb-1">收益</p>
               <p :class="[
                 'text-lg font-semibold',
                 (userEstimatedChange || estimatedChange).totalChangeValue >= 0 ? 'text-red-500' : 'text-green-500'
               ]">
                 {{ (userEstimatedChange || estimatedChange).totalChangeValue >= 0 ? '+' : '' }}¥{{ formatNumber((userEstimatedChange || estimatedChange).totalChangeValue) }}
+              </p>
+            </div>
+            <div class="info-item bg-gray-50 rounded-lg p-3">
+              <p class="text-xs text-gray-500 mb-1">收益率</p>
+              <p :class="[
+                'text-lg font-semibold',
+                (userEstimatedChange || estimatedChange).estimatedChangePercent >= 0 ? 'text-red-500' : 'text-green-500'
+              ]">
+                {{ (userEstimatedChange || estimatedChange).estimatedChangePercent >= 0 ? '+' : '' }}{{ formatNumber((userEstimatedChange || estimatedChange).estimatedChangePercent) }}%
               </p>
             </div>
           </div>
@@ -663,6 +672,7 @@ onUnmounted(() => {
 .search-page {
   min-height: 100vh;
   background-color: #f9fafb;
+  padding-bottom: 80px; /* 为底部导航留出空间 */
 }
 
 .chart-container {

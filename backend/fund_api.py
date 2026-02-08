@@ -90,15 +90,6 @@ def calculate_valuation_at_time(current_time, holdings):
         return [{'time': time_str, 'changePercent': round(estimated_change, 2)}]
     return []
 
-# 基金005550的持仓股票模拟价格数据
-MOCK_STOCK_PRICES_005550 = {
-    '300394': {'open': 151.00, 'close': 155.20, 'high': 156.50, 'low': 150.20, 'preClose': 151.00, 'changePercent': 2.78},
-    '300308': {'open': 156.50, 'close': 158.30, 'high': 159.80, 'low': 155.90, 'preClose': 156.50, 'changePercent': 1.15},
-    '002463': {'open': 30.15, 'close': 29.80, 'high': 30.50, 'low': 29.60, 'preClose': 30.15, 'changePercent': -1.16},
-    '002371': {'open': 305.20, 'close': 308.50, 'high': 310.00, 'low': 304.50, 'preClose': 305.20, 'changePercent': 1.08},
-    '300476': {'open': 24.25, 'close': 24.60, 'high': 24.80, 'low': 24.10, 'preClose': 24.25, 'changePercent': 1.44}
-}
-
 # 缓存股票实时行情，避免频繁请求
 stock_cache = {}
 cache_time = None
@@ -332,25 +323,7 @@ def get_fund_holdings():
 
         except Exception as e:
             print(f"AkShare获取持仓失败: {str(e)}")
-            # 返回模拟数据作为fallback
-            print("使用模拟数据")
-            mock_holdings = {
-                '000001': [
-                    {'stockCode': '000001.XSHE', 'stockName': '平安银行', 'shares': 10000, 'costPrice': 12.50, 'holdPercent': 8.5},
-                    {'stockCode': '000002.XSHE', 'stockName': '万科A', 'shares': 5000, 'costPrice': 25.80, 'holdPercent': 5.2},
-                    {'stockCode': '600000.XSHG', 'stockName': '浦发银行', 'shares': 8000, 'costPrice': 8.90, 'holdPercent': 6.8}
-                ],
-                '000002': [
-                    {'stockCode': '600036.XSHG', 'stockName': '招商银行', 'shares': 15000, 'costPrice': 35.20, 'holdPercent': 9.2},
-                    {'stockCode': '000858.XSHE', 'stockName': '五粮液', 'shares': 3000, 'costPrice': 180.50, 'holdPercent': 10.5}
-                ]
-            }
-
-            holdings = mock_holdings.get(fund_code, [])
-            return jsonify({
-                'fundCode': fund_code,
-                'holdings': holdings
-            })
+            return jsonify({'error': f'获取基金持仓失败: {str(e)}'}), 500
 
     except Exception as e:
         print(f"获取基金持仓失败: {str(e)}")
@@ -392,23 +365,6 @@ def get_stock_prices():
                     'pe': 0,  # stock_bid_ask_em不提供
                     'pb': 0   # stock_bid_ask_em不提供
                 }
-            elif stock_code in MOCK_STOCK_PRICES_005550:
-                # 使用005550基金的模拟股票价格
-                mock_data = MOCK_STOCK_PRICES_005550[stock_code]
-                prices[code] = {
-                    'open': mock_data['open'],
-                    'close': mock_data['close'],
-                    'high': mock_data['high'],
-                    'low': mock_data['low'],
-                    'preClose': mock_data['preClose'],
-                    'changePercent': mock_data['changePercent'],
-                    'change': mock_data['close'] - mock_data['preClose'],
-                    'volume': 1000000,
-                    'amount': 100000000,
-                    'pe': 30.5,
-                    'pb': 3.2
-                }
-                print(f"  {code}: 使用模拟数据 涨跌: {mock_data['changePercent']:.2f}%")
             else:
                 # 未找到该股票，返回默认值
                 print(f"  {code}: 未找到数据，使用默认值")

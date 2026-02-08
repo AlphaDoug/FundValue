@@ -1,6 +1,10 @@
 const express = require('express')
 const cors = require('cors')
 const { auth, get_price, get_fundamentals } = require('jqdatasdk')
+const { exec } = require('child_process')
+const path = require('path')
+const { promisify } = require('util')
+const execAsync = promisify(exec)
 
 const app = express()
 const PORT = 8000
@@ -36,34 +40,18 @@ app.get('/api/fund/holdings', async (req, res) => {
       return res.status(400).json({ error: '基金代码不能为空' })
     }
 
-    // 这里需要调用实际的基金持仓查询API
-    // 由于聚宽主要提供股票数据，基金持仓数据需要从其他渠道获取
-    // 这里返回模拟数据用于演示
-    const mockHoldings = [
-      {
-        stockCode: '000001.XSHE',
-        stockName: '平安银行',
-        shares: 10000,
-        costPrice: 12.50
-      },
-      {
-        stockCode: '000002.XSHE',
-        stockName: '万科A',
-        shares: 5000,
-        costPrice: 25.80
-      },
-      {
-        stockCode: '600000.XSHG',
-        stockName: '浦发银行',
-        shares: 8000,
-        costPrice: 8.90
-      }
-    ]
-
-    res.json({
-      fundCode,
-      holdings: mockHoldings
+    // 调用akshare Python脚本获取真实持仓数据
+    const scriptPath = path.join(__dirname, 'get_holdings.py')
+    const { stdout, stderr } = await execAsync(`python "${scriptPath}" ${fundCode}`, {
+      encoding: 'utf8'
     })
+
+    if (stderr) {
+      console.error('执行Python脚本错误:', stderr)
+    }
+
+    const holdingsData = JSON.parse(stdout)
+    return res.json(holdingsData)
   } catch (error) {
     console.error('获取基金持仓失败:', error)
     res.status(500).json({ error: '获取基金持仓失败' })

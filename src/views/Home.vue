@@ -10,27 +10,16 @@
       <div class="summary-card bg-white rounded-2xl p-6 shadow-md mb-6">
         <div class="flex justify-between items-center mb-4">
           <h2 class="text-lg font-semibold text-gray-800">总资产概览</h2>
-          <div class="flex items-center gap-3">
-            <span class="text-xs text-gray-500">{{ lastUpdateTime }}</span>
-            <button
-              @click="toggleAutoRefresh"
-              :class="[
-                'px-2 py-1 rounded text-xs font-medium transition-colors',
-                autoRefresh ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600'
-              ]"
-            >
-              {{ autoRefresh ? '自动刷新中' : '已暂停' }}
-            </button>
-          </div>
+          <span class="text-xs text-gray-500">{{ lastUpdateTime }}</span>
         </div>
 
         <div class="grid grid-cols-3 gap-4">
           <div class="text-center">
-            <p class="text-xs text-gray-500 mb-1">总持仓</p>
-            <p class="text-lg font-bold text-gray-800">¥{{ formatNumber(myHoldings.totalAmount) }}</p>
+            <p class="text-xs text-gray-500 mb-1">总资产</p>
+            <p class="text-lg font-bold text-gray-800">¥{{ formatNumber(myHoldings.totalAmount + myHoldings.totalProfit) }}</p>
           </div>
           <div class="text-center">
-            <p class="text-xs text-gray-500 mb-1">总收益</p>
+            <p class="text-xs text-gray-500 mb-1">收益</p>
             <p :class="['text-lg font-bold', myHoldings.totalProfit >= 0 ? 'text-red-500' : 'text-green-500']">
               {{ myHoldings.totalProfit >= 0 ? '+' : '' }}¥{{ formatNumber(myHoldings.totalProfit) }}
             </p>
@@ -87,13 +76,13 @@
 
           <div class="flex justify-between items-end">
             <div>
-              <p class="text-xs text-gray-500">持仓金额</p>
-              <p class="text-lg font-bold text-gray-800">¥{{ formatNumber(holding.amount) }}</p>
+              <p class="text-xs text-gray-500">资产</p>
+              <p class="text-lg font-bold text-gray-800">¥{{ formatNumber(holding.amount + (holding.currentProfit || holding.initialProfit || 0)) }}</p>
             </div>
             <div class="text-right">
-              <p class="text-xs text-gray-500">当前收益</p>
-              <p :class="['text-lg font-bold', (holding.currentProfit || holding.initialProfit) >= 0 ? 'text-red-500' : 'text-green-500']">
-                {{ (holding.currentProfit || holding.initialProfit) >= 0 ? '+' : '' }}¥{{ formatNumber(holding.currentProfit || holding.initialProfit) }}
+              <p class="text-xs text-gray-500">收益</p>
+              <p :class="['text-lg font-bold', (holding.currentProfit || holding.initialProfit || 0) >= 0 ? 'text-red-500' : 'text-green-500']">
+                {{ (holding.currentProfit || holding.initialProfit || 0) >= 0 ? '+' : '' }}¥{{ formatNumber(holding.currentProfit || holding.initialProfit || 0) }}
               </p>
             </div>
           </div>
@@ -122,8 +111,23 @@ const myHoldings = useMyHoldingsStore()
 
 const showAddDialog = ref(false)
 const autoRefresh = ref(true)
+const refreshInterval = ref(30000) // 默认30秒
 const lastUpdateTime = ref('')
 let updateTimer = null
+
+// 从localStorage加载设置
+function loadSettings() {
+  const saved = localStorage.getItem('appSettings')
+  if (saved) {
+    try {
+      const settings = JSON.parse(saved)
+      autoRefresh.value = settings.autoRefresh ?? true
+      refreshInterval.value = settings.refreshInterval ?? 30000
+    } catch (e) {
+      console.error('加载设置失败:', e)
+    }
+  }
+}
 
 function formatNumber(num) {
   if (num === undefined || num === null) return '0.00'
@@ -159,24 +163,31 @@ function viewFundDetail(holding) {
   })
 }
 
-function toggleAutoRefresh() {
-  autoRefresh.value = !autoRefresh.value
+// 应用自动刷新设置
+function applyAutoRefreshSettings() {
+  // 清除现有定时器
+  if (updateTimer) {
+    clearInterval(updateTimer)
+    updateTimer = null
+  }
+
   if (autoRefresh.value) {
     // 开启自动刷新
-    if (updateTimer) clearInterval(updateTimer)
     updateAllProfits()
     updateTimer = setInterval(() => {
       if (myHoldings.holdings.length > 0) {
         updateAllProfits()
       }
-    }, 30000)
-  } else {
-    // 停止自动刷新
-    if (updateTimer) {
-      clearInterval(updateTimer)
-      updateTimer = null
-    }
+    }, refreshInterval.value)
   }
+}
+
+// 设置变化处理函数
+const handleSettingsChanged = (event) => {
+  const newSettings = event.detail
+  autoRefresh.value = newSettings.autoRefresh
+  refreshInterval.value = newSettings.refreshInterval
+  applyAutoRefreshSettings()
 }
 
 // 更新所有持仓的收益
@@ -210,6 +221,9 @@ async function updateAllProfits() {
 }
 
 onMounted(() => {
+  // 加载设置
+  loadSettings()
+
   // 从存储加载数据
   myHoldings.loadFromStorage()
 
@@ -218,19 +232,22 @@ onMounted(() => {
     updateAllProfits()
   }
 
-  // 如果自动刷新开启，则启动定时器
-  if (autoRefresh.value) {
-    updateTimer = setInterval(() => {
-      if (myHoldings.holdings.length > 0) {
-    }
-  }, 30000)
-  }
+  // 应用自动刷新设置
+  applyAutoRefreshSettings()
+
+  // 监听设置变化
+  window.addEventListener('settings-changed', handleSettingsChanged)
 })
 
 onUnmounted(() => {
+  // 清除定时器
   if (updateTimer) {
     clearInterval(updateTimer)
+    updateTimer = null
   }
+
+  // 移除设置变化监听
+  window.removeEventListener('settings-changed', handleSettingsChanged)
 })
 </script>
 
@@ -239,6 +256,7 @@ onUnmounted(() => {
   width: 100%;
   min-height: 100vh;
   background-color: #f5f5f5;
+  padding-bottom: 80px; /* 为底部导航留出空间 */
 }
 
 .holding-card:active {

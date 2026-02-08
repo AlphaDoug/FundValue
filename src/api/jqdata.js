@@ -1,7 +1,7 @@
 // 聚宽数据API封装
 import axios from 'axios'
 
-const API_BASE = 'http://localhost:8001/api' // 后端服务地址
+const API_BASE = 'http://localhost:8000/api' // 后端服务地址
 
 // 根据基金代码查询最新持仓
 export async function getFundHoldings(fundCode) {
